@@ -103,6 +103,13 @@ enum MainMenu {
         zoomInAlt.allowsKeyEquivalentWhenHidden = true
         menu.addItem(zoomInAlt)
         menu.addItem(item("缩小", #selector(AppDelegate.zoomOutAction(_:)), "-"))
+        let widthMenu = NSMenu(title: "正文宽度")
+        for width in ContentWidth.allCases {
+            let option = item(width.title, #selector(AppDelegate.contentWidthAction(_:)))
+            option.representedObject = width.rawValue
+            widthMenu.addItem(option)
+        }
+        menu.addItem(root(widthMenu))
         menu.addItem(.separator())
         menu.addItem(item("显示标签页栏", #selector(NSWindow.toggleTabBar(_:))))
         menu.addItem(item("显示所有标签页", #selector(NSWindow.toggleTabOverview(_:)), "\\", [.command, .shift]))

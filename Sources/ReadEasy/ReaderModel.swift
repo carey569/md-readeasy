@@ -49,6 +49,8 @@ final class ReaderModel {
 
     /// 页面里的图片预览是否打开：打开时缩放快捷键和 esc 作用于预览
     var viewerOpen = false
+    /// 工具栏「字号与宽度」弹出面板
+    var layoutSettingsVisible = false
 
     // 快速打开
     var quickOpenVisible = false

@@ -27,12 +27,39 @@ extension URL {
 }
 
 extension Notification.Name {
-    static let readerZoomDidChange = Notification.Name("ReadEasy.zoomDidChange")
+    /// 正文字号或宽度变了，所有窗口跟着更新
+    static let readerLayoutDidChange = Notification.Name("ReadEasy.layoutDidChange")
+}
+
+/// 正文栏的最大宽度
+enum ContentWidth: String, CaseIterable, Identifiable {
+    case standard, wide, full
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .standard: "标准"
+        case .wide: "较宽"
+        case .full: "全宽"
+        }
+    }
+
+    /// 对应页面里 `.markdown-body` 的 max-width
+    var css: String {
+        switch self {
+        case .standard: "760px"
+        case .wide: "1040px"
+        case .full: "none"
+        }
+    }
 }
 
 enum Preferences {
     private static let defaults = UserDefaults.standard
     static let zoomSteps: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+    static let minZoom = zoomSteps.first!
+    static let maxZoom = zoomSteps.last!
 
     static var zoom: Double {
         get {
@@ -40,8 +67,25 @@ enum Preferences {
             return value == 0 ? 1 : value
         }
         set {
-            defaults.set(newValue, forKey: "zoom")
-            NotificationCenter.default.post(name: .readerZoomDidChange, object: nil)
+            defaults.set(min(max(newValue, minZoom), maxZoom), forKey: "zoom")
+            NotificationCenter.default.post(name: .readerLayoutDidChange, object: nil)
+        }
+    }
+
+    /// direction：1 放大一档，-1 缩小一档
+    static func stepZoom(_ direction: Int) {
+        let current = zoom
+        let next = direction > 0
+            ? zoomSteps.first { $0 > current + 0.001 }
+            : zoomSteps.last { $0 < current - 0.001 }
+        if let next { zoom = next }
+    }
+
+    static var contentWidth: ContentWidth {
+        get { defaults.string(forKey: "contentWidth").flatMap(ContentWidth.init) ?? .standard }
+        set {
+            defaults.set(newValue.rawValue, forKey: "contentWidth")
+            NotificationCenter.default.post(name: .readerLayoutDidChange, object: nil)
         }
     }
 

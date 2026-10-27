@@ -96,7 +96,16 @@ struct DocumentPane: View {
                     .disabled(!model.canGoForward)
                     .help("前进 ⌘]")
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        model.layoutSettingsVisible.toggle()
+                    } label: {
+                        Label("字号与宽度", systemImage: "textformat.size")
+                    }
+                    .help("调整正文字号和宽度")
+                    .popover(isPresented: $model.layoutSettingsVisible, arrowEdge: .bottom) {
+                        LayoutSettingsView()
+                    }
                     Button {
                         model.showOutline.toggle()
                     } label: {
@@ -120,6 +129,60 @@ struct WebViewHost: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView { webView }
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+
+// MARK: - 字号与宽度
+
+/// 设置对所有窗口生效，菜单快捷键和捏合改动时这里同步刷新
+struct LayoutSettingsView: View {
+    @State private var zoom = Preferences.zoom
+    @State private var width = Preferences.contentWidth
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+                Text("字号")
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Button { Preferences.stepZoom(-1) } label: {
+                        Image(systemName: "textformat.size.smaller")
+                            .frame(width: 22)
+                    }
+                    .disabled(zoom <= Preferences.minZoom)
+                    .help("缩小 ⌘-")
+                    Button { Preferences.zoom = 1 } label: {
+                        Text(zoom, format: .percent.precision(.fractionLength(0)))
+                            .monospacedDigit()
+                            .frame(width: 48)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("实际大小 ⌘0")
+                    Button { Preferences.stepZoom(1) } label: {
+                        Image(systemName: "textformat.size.larger")
+                            .frame(width: 22)
+                    }
+                    .disabled(zoom >= Preferences.maxZoom)
+                    .help("放大 ⌘+")
+                }
+            }
+            GridRow {
+                Text("宽度")
+                    .foregroundStyle(.secondary)
+                Picker("宽度", selection: $width) {
+                    ForEach(ContentWidth.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
+        .padding(16)
+        .onChange(of: width) { Preferences.contentWidth = width }
+        .onReceive(NotificationCenter.default.publisher(for: .readerLayoutDidChange)) { _ in
+            zoom = Preferences.zoom
+            width = Preferences.contentWidth
+        }
+    }
 }
 
 // MARK: - 欢迎页

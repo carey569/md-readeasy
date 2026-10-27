@@ -13,6 +13,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var isReady = false
     private var hasLoaded = false
     private var pendingRender: [String: Any]?
+    /// 捏合过程中的临时字号，松手后才写入偏好设置
+    private var pinchZoom: Double?
     private var observers: [NSObjectProtocol] = []
     private var appearanceObservation: NSKeyValueObservation?
 
@@ -24,6 +26,9 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
 
         config.userContentController.add(WeakScriptHandler(self), name: "bridge")
         webView.navigationDelegate = self
+        webView.onMagnify = { [weak self] event, point in
+            self?.magnify(by: event.magnification, phase: event.phase, at: point)
+        }
         webView.setValue(false, forKey: "drawsBackground")
         webView.pageZoom = Preferences.zoom
         #if DEBUG
@@ -32,8 +37,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         load()
 
         observers.append(NotificationCenter.default.addObserver(
-            forName: .readerZoomDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.webView.pageZoom = Preferences.zoom }
+            forName: .readerLayoutDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyLayout() }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: NSColor.systemColorsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -103,6 +108,33 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         webView.evaluateJavaScript("ReadEasy.viewerClose()")
     }
 
+    /// 字号用 pageZoom 整页缩放，正文宽度交给页面里的 CSS 变量
+    private func applyLayout() {
+        pinchZoom = nil
+        webView.pageZoom = Preferences.zoom
+        guard isReady else { return }
+        webView.evaluateJavaScript("ReadEasy.setWidth('\(Preferences.contentWidth.css)')")
+    }
+
+    /// 触控板捏合：预览打开时缩放预览图；否则缩放正文，松手后保存并同步到所有窗口
+    func magnify(by magnification: Double, phase: NSEvent.Phase, at point: CGPoint) {
+        guard isReady else { return }
+        let pageZoom = webView.pageZoom
+        if model?.viewerOpen == true {
+            webView.callAsyncJavaScript(
+                "ReadEasy.viewerPinch(f, x, y)",
+                arguments: ["f": 1 + magnification, "x": point.x / pageZoom, "y": point.y / pageZoom],
+                in: nil, in: .page)
+            return
+        }
+        let zoom = min(max((pinchZoom ?? pageZoom) * (1 + magnification), Preferences.minZoom), Preferences.maxZoom)
+        pinchZoom = zoom
+        webView.pageZoom = zoom
+        if phase.isEmpty || phase.contains(.ended) || phase.contains(.cancelled) {
+            Preferences.zoom = (zoom * 20).rounded() / 20
+        }
+    }
+
     private func applyAccent() {
         guard isReady else { return }
         var hex = "#007aff"
@@ -129,6 +161,7 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             hasLoaded = true
             isReady = true
             applyAccent()
+            applyLayout()
             if let payload = pendingRender {
                 pendingRender = nil
                 send(payload)
@@ -210,6 +243,15 @@ final class ReaderWebView: WKWebView {
         "WKMenuItemIdentifierOpenMediaInNewWindow",
         "WKMenuItemIdentifierDownloadMedia",
     ]
+
+    /// 触控板捏合交给 WebBridge，point 为视图内左上角起算的坐标
+    var onMagnify: (@MainActor (NSEvent, CGPoint) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        guard let onMagnify else { return super.magnify(with: event) }
+        let p = convert(event.locationInWindow, from: nil)
+        onMagnify(event, CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))
+    }
 
     // 不接收拖放，让外层 SwiftUI 视图统一处理“拖文件进来打开”
     override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {}

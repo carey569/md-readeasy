@@ -232,6 +232,7 @@
     else if (p.keepScroll) settleScroll(() => window.scrollTo(0, prevY));
     else settleScroll(() => window.scrollTo(0, p.scrollY || 0));
 
+    captureAnchor();
     post('headings', { headings: env.headings || [] });
     lastActive = undefined;
     updateActive();
@@ -286,11 +287,58 @@
     scrollTimer = setTimeout(reportScroll, 120);
     if (ticking) return;
     ticking = true;
-    requestAnimationFrame(() => { ticking = false; updateActive(); });
+    requestAnimationFrame(() => {
+      ticking = false;
+      updateActive();
+      captureAnchor();
+    });
   }, { passive: true });
 
-  // 窗口尺寸变化（例如开关侧边栏、大纲）会改变标题位置
-  window.addEventListener('resize', () => requestAnimationFrame(updateActive));
+  // —— 重新排版时保持阅读位置 ——
+  // 字号、正文宽度、窗口大小变化都会让内容重新换行，以视口顶部所在的段落为锚点恢复位置
+
+  let anchor = null;
+
+  function captureAnchor() {
+    const blocks = content.children;
+    let lo = 0;
+    let hi = blocks.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (blocks[mid].getBoundingClientRect().bottom > 0) {
+        found = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    if (found < 0 || window.scrollY <= 0) {
+      anchor = null;
+      return;
+    }
+    const r = blocks[found].getBoundingClientRect();
+    anchor = { el: blocks[found], ratio: r.height ? -r.top / r.height : 0 };
+  }
+
+  function restoreAnchor() {
+    if (!anchor || !anchor.el.isConnected) return;
+    const r = anchor.el.getBoundingClientRect();
+    window.scrollBy(0, r.top + anchor.ratio * r.height);
+  }
+
+  function setWidth(width) {
+    if (getComputedStyle(content).getPropertyValue('--content-width').trim() === width) return;
+    document.documentElement.style.setProperty('--content-width', width);
+    restoreAnchor();
+    requestAnimationFrame(updateActive);
+  }
+
+  // 窗口尺寸变化（包括原生层调整字号、开关侧边栏和大纲）会改变排版和标题位置
+  window.addEventListener('resize', () => {
+    restoreAnchor();
+    requestAnimationFrame(updateActive);
+  });
 
   // —— 图片 / 图表预览 ——
 
@@ -315,7 +363,6 @@
   let view = null;
   let animTimer = null;
   let drag = null;
-  let gestureBase = 1;
 
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
   const areaW = () => innerWidth - VIEWER_PAD * 2;
@@ -530,7 +577,7 @@
     else fitViewer();
   });
 
-  // 触控板双指滑动平移；捏合或按住 ⌘ 滚动缩放
+  // 触控板双指滑动平移；按住 ⌘ 滚动缩放（捏合由原生层转发给 viewerPinch）
   viewerEl.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (!view) return;
@@ -541,17 +588,6 @@
       panBy(-e.deltaX * k, -e.deltaY * k, false);
     }
   }, { passive: false });
-
-  // WebKit 在 macOS 上把触控板捏合作为 gesture 事件发给页面
-  viewerEl.addEventListener('gesturestart', (e) => {
-    e.preventDefault();
-    if (view) gestureBase = view.scale;
-  });
-  viewerEl.addEventListener('gesturechange', (e) => {
-    e.preventDefault();
-    if (view) zoomAt(gestureBase * e.scale, e.clientX, e.clientY, false);
-  });
-  viewerEl.addEventListener('gestureend', (e) => e.preventDefault());
 
   document.addEventListener('keydown', (e) => {
     if (!view || e.metaKey || e.ctrlKey) return;
@@ -699,7 +735,11 @@
       scrollToId(id, true);
     },
     viewerZoom,
+    viewerPinch: (factor, x, y) => {
+      if (view) zoomAt(view.scale * factor, x, y, false);
+    },
     viewerClose: () => closeViewer(true),
+    setWidth,
     setAccent: (color) => document.documentElement.style.setProperty('--accent', color),
   };
 

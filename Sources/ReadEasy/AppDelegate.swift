@@ -165,17 +165,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc func zoomInAction(_ sender: Any?) {
         if let viewer = activeViewer { return viewer.viewerZoom(1) }
-        Preferences.zoom = Preferences.zoomSteps.first { $0 > Preferences.zoom + 0.001 } ?? Preferences.zoom
+        Preferences.stepZoom(1)
     }
 
     @objc func zoomOutAction(_ sender: Any?) {
         if let viewer = activeViewer { return viewer.viewerZoom(-1) }
-        Preferences.zoom = Preferences.zoomSteps.last { $0 < Preferences.zoom - 0.001 } ?? Preferences.zoom
+        Preferences.stepZoom(-1)
     }
 
     @objc func zoomResetAction(_ sender: Any?) {
         if let viewer = activeViewer { return viewer.viewerZoom(0) }
         Preferences.zoom = 1
+    }
+
+    @objc func contentWidthAction(_ sender: NSMenuItem) {
+        if let width = (sender.representedObject as? String).flatMap(ContentWidth.init) {
+            Preferences.contentWidth = width
+        }
     }
 
     @objc func chooseEditorAction(_ sender: Any?) {
@@ -217,9 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             item.title = "外部编辑器：\(ExternalEditor.appName)…"
             return true
         case #selector(zoomInAction(_:)):
-            return activeViewer != nil || Preferences.zoom < (Preferences.zoomSteps.last ?? 3)
+            return activeViewer != nil || Preferences.zoom < Preferences.maxZoom
         case #selector(zoomOutAction(_:)):
-            return activeViewer != nil || Preferences.zoom > (Preferences.zoomSteps.first ?? 0.5)
+            return activeViewer != nil || Preferences.zoom > Preferences.minZoom
+        case #selector(contentWidthAction(_:)):
+            item.state = item.representedObject as? String == Preferences.contentWidth.rawValue ? .on : .off
+            return true
         default:
             return true
         }

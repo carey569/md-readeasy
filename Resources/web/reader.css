@@ -87,7 +87,7 @@ body {
 ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 
 .markdown-body {
-  max-width: 760px;
+  max-width: var(--content-width, 760px);
   margin: 0 auto;
   word-wrap: break-word;
 }

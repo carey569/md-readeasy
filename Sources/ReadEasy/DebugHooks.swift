@@ -39,6 +39,22 @@ enum DebugHooks {
         case "sidebar": model.toggleSidebar()
         case "zoomIn": AppDelegate.shared.zoomInAction(nil)
         case "zoomReset": AppDelegate.shared.zoomResetAction(nil)
+        case "width": Preferences.contentWidth = ContentWidth(rawValue: arg) ?? .standard
+        case "pinch":
+            // 模拟一次捏合：arg 为每一步的放大量，逗号分隔
+            let web = model.web
+            let center = CGPoint(x: web.webView.bounds.midX, y: web.webView.bounds.midY)
+            let steps = arg.split(separator: ",").compactMap { Double($0) }
+            web.magnify(by: 0, phase: .began, at: center)
+            for step in steps { web.magnify(by: step, phase: .changed, at: center) }
+            web.magnify(by: 0, phase: .ended, at: center)
+        case "layoutSettings": model.layoutSettingsVisible.toggle()
+        case "popoverShot":
+            guard let window = NSApp.windows.first(where: { "\(type(of: $0))".contains("Popover") }),
+                  let view = window.contentView?.superview ?? window.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return write("no popover", to: out) }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))
         case "newTab": AppDelegate.shared.newTab(host: controller)
         case "clearRecents": NSDocumentController.shared.clearRecentDocuments(nil)
         case "appearance": NSApp.appearance = arg == "dark" ? NSAppearance(named: .darkAqua) : arg == "light" ? NSAppearance(named: .aqua) : nil
@@ -64,6 +80,8 @@ enum DebugHooks {
                 "treeCount": model.folderFiles.count,
                 "expanded": Array(model.expanded),
                 "zoom": Preferences.zoom,
+                "pageZoom": model.web.webView.pageZoom,
+                "width": Preferences.contentWidth.rawValue,
                 "loadError": model.loadError ?? "",
                 "viewerOpen": model.viewerOpen,
             ]
