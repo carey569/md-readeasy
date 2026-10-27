@@ -157,15 +157,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if let url = sender.representedObject as? URL { open(url) }
     }
 
+    /// 当前窗口正在预览图片时，缩放快捷键作用于预览图，而不是页面字号
+    private var activeViewer: WebBridge? {
+        guard let model = currentController?.model, model.viewerOpen else { return nil }
+        return model.web
+    }
+
     @objc func zoomInAction(_ sender: Any?) {
+        if let viewer = activeViewer { return viewer.viewerZoom(1) }
         Preferences.zoom = Preferences.zoomSteps.first { $0 > Preferences.zoom + 0.001 } ?? Preferences.zoom
     }
 
     @objc func zoomOutAction(_ sender: Any?) {
+        if let viewer = activeViewer { return viewer.viewerZoom(-1) }
         Preferences.zoom = Preferences.zoomSteps.last { $0 < Preferences.zoom - 0.001 } ?? Preferences.zoom
     }
 
     @objc func zoomResetAction(_ sender: Any?) {
+        if let viewer = activeViewer { return viewer.viewerZoom(0) }
         Preferences.zoom = 1
     }
 
@@ -208,9 +217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             item.title = "外部编辑器：\(ExternalEditor.appName)…"
             return true
         case #selector(zoomInAction(_:)):
-            return Preferences.zoom < (Preferences.zoomSteps.last ?? 3)
+            return activeViewer != nil || Preferences.zoom < (Preferences.zoomSteps.last ?? 3)
         case #selector(zoomOutAction(_:)):
-            return Preferences.zoom > (Preferences.zoomSteps.first ?? 0.5)
+            return activeViewer != nil || Preferences.zoom > (Preferences.zoomSteps.first ?? 0.5)
         default:
             return true
         }

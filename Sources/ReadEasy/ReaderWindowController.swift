@@ -103,6 +103,8 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSMenu
     override func cancelOperation(_ sender: Any?) {
         if model.quickOpenVisible {
             model.quickOpenVisible = false
+        } else if model.viewerOpen {
+            model.web.viewerClose()
         } else if model.findVisible {
             model.hideFind()
         }

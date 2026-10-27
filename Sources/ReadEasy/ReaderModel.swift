@@ -47,6 +47,9 @@ final class ReaderModel {
     var findStatus = FindStatus()
     private(set) var findFocusRequest = 0
 
+    /// 页面里的图片预览是否打开：打开时缩放快捷键和 esc 作用于预览
+    var viewerOpen = false
+
     // 快速打开
     var quickOpenVisible = false
     private(set) var quickOpenItems: [QuickOpenItem] = []

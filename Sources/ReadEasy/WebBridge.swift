@@ -92,6 +92,17 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         webView.evaluateJavaScript("ReadEasy.findClear()")
     }
 
+    /// 1 放大、-1 缩小、0 在适合窗口和实际大小之间切换
+    func viewerZoom(_ step: Int) {
+        guard isReady else { return }
+        webView.evaluateJavaScript("ReadEasy.viewerZoom(\(step))")
+    }
+
+    func viewerClose() {
+        guard isReady else { return }
+        webView.evaluateJavaScript("ReadEasy.viewerClose()")
+    }
+
     private func applyAccent() {
         guard isReady else { return }
         var hex = "#007aff"
@@ -144,6 +155,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             NSPasteboard.general.setString(body["text"] as? String ?? "", forType: .string)
         case "find":
             model?.findStatus = FindStatus(body)
+        case "viewer":
+            model?.viewerOpen = body["open"] as? Bool ?? false
         default:
             break
         }
@@ -169,6 +182,7 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        model?.viewerOpen = false
         load()
     }
 }

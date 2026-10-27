@@ -65,6 +65,7 @@ enum DebugHooks {
                 "expanded": Array(model.expanded),
                 "zoom": Preferences.zoom,
                 "loadError": model.loadError ?? "",
+                "viewerOpen": model.viewerOpen,
             ]
             let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
             write(String(data: data ?? Data(), encoding: .utf8) ?? "", to: out)
