@@ -35,7 +35,16 @@ enum DebugHooks {
         case "findNext": model.findStep(backwards: false)
         case "hideFind": model.hideFind()
         case "quickOpen": model.toggleQuickOpen()
-        case "outline": model.showOutline.toggle()
+        case "outline": model.toggleInspector(.outline)
+        case "notesPanel": model.toggleInspector(.notes)
+        case "addNote": model.addNoteFromSelection()
+        case "revealNote":
+            // arg：备注在列表里的序号，加 ",edit" 直接进入编辑
+            let parts = arg.split(separator: ",")
+            let placed = model.sortedNotes.placed
+            if let index = parts.first.flatMap({ Int($0) }), placed.indices.contains(index) {
+                model.revealNote(placed[index].id, edit: parts.dropFirst().first == "edit")
+            }
         case "sidebar": model.toggleSidebar()
         case "zoomIn": AppDelegate.shared.zoomInAction(nil)
         case "zoomReset": AppDelegate.shared.zoomResetAction(nil)
@@ -84,6 +93,10 @@ enum DebugHooks {
                 "width": Preferences.contentWidth.rawValue,
                 "loadError": model.loadError ?? "",
                 "viewerOpen": model.viewerOpen,
+                "inspector": model.showInspector ? model.inspectorTab.rawValue : "",
+                "notes": model.sortedNotes.placed.map { ["quote": $0.quote, "text": $0.text] },
+                "missingNotes": model.sortedNotes.missing.map { ["quote": $0.quote, "text": $0.text] },
+                "firstResponder": controller.window?.firstResponder.map { "\(type(of: $0))" } ?? "",
             ]
             let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
             write(String(data: data ?? Data(), encoding: .utf8) ?? "", to: out)

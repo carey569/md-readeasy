@@ -13,6 +13,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var isReady = false
     private var hasLoaded = false
     private var pendingRender: [String: Any]?
+    /// 当前文档的备注，每次发送渲染请求时带上最新的一份
+    private var notesPayload: [[String: Any]] = []
     /// 捏合过程中的临时字号，松手后才写入偏好设置
     private var pinchZoom: Double?
     private var observers: [NSObjectProtocol] = []
@@ -29,6 +31,7 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         webView.onMagnify = { [weak self] event, point in
             self?.magnify(by: event.magnification, phase: event.phase, at: point)
         }
+        webView.onAddNote = { [weak self] in self?.model?.addNoteFromSelection() }
         webView.setValue(false, forKey: "drawsBackground")
         webView.pageZoom = Preferences.zoom
         #if DEBUG
@@ -60,7 +63,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
 
     // MARK: 原生 → 页面
 
-    func render(markdown: String, fileURL: URL, anchor: String?, scrollY: Double, keepScroll: Bool) {
+    func render(markdown: String, fileURL: URL, anchor: String?, scrollY: Double, keepScroll: Bool, notes: [Note]) {
+        notesPayload = notes.map(\.payload)
         let payload: [String: Any] = [
             "markdown": markdown,
             "base": fileURL.deletingLastPathComponent().absoluteString,
@@ -73,6 +77,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     }
 
     private func send(_ payload: [String: Any]) {
+        var payload = payload
+        payload["notes"] = notesPayload
         webView.callAsyncJavaScript(
             "return await ReadEasy.render(p)", arguments: ["p": payload], in: nil, in: .page
         ) { result in
@@ -106,6 +112,37 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     func viewerClose() {
         guard isReady else { return }
         webView.evaluateJavaScript("ReadEasy.viewerClose()")
+    }
+
+    func setNotes(_ notes: [Note]) {
+        notesPayload = notes.map(\.payload)
+        guard isReady else { return }
+        webView.callAsyncJavaScript("ReadEasy.setNotes(n)", arguments: ["n": notesPayload], in: nil, in: .page)
+    }
+
+    /// 为当前选中的正文打开备注编辑框；没有可用的选区时返回 false
+    func addNoteFromSelection() async -> Bool {
+        guard isReady else { return false }
+        let result = try? await webView.callAsyncJavaScript(
+            "return ReadEasy.noteFromSelection()", arguments: [:], contentWorld: .page)
+        guard result as? Bool == true else { return false }
+        focusPage()
+        return true
+    }
+
+    /// 滚动到备注所在位置并打开备注卡片，edit 为 true 时直接进入编辑
+    func revealNote(_ id: String, edit: Bool) {
+        guard isReady else { return }
+        webView.callAsyncJavaScript(
+            "return ReadEasy.noteReveal(id, edit)", arguments: ["id": id, "edit": edit], in: nil, in: .page
+        ) { [weak self] result in
+            if case .success(let value) = result, value as? Bool == true { self?.focusPage() }
+        }
+    }
+
+    /// 从边栏、菜单打开备注卡片后让网页接收键盘输入（编辑框打字、esc 关闭）
+    private func focusPage() {
+        webView.window?.makeFirstResponder(webView)
     }
 
     /// 字号用 pageZoom 整页缩放，正文宽度交给页面里的 CSS 变量
@@ -190,6 +227,21 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             model?.findStatus = FindStatus(body)
         case "viewer":
             model?.viewerOpen = body["open"] as? Bool ?? false
+        case "noteAdd":
+            guard let quote = body["quote"] as? String, !quote.isEmpty,
+                  let text = body["text"] as? String, !text.isEmpty else { break }
+            model?.addNote(
+                quote: quote, prefix: body["prefix"] as? String ?? "", suffix: body["suffix"] as? String ?? "",
+                start: (body["start"] as? NSNumber)?.intValue ?? 0, text: text)
+        case "noteUpdate":
+            guard let id = body["id"] as? String, let text = body["text"] as? String, !text.isEmpty else { break }
+            model?.updateNote(id, text: text)
+        case "noteDelete":
+            if let id = body["id"] as? String { model?.deleteNote(id) }
+        case "notes":
+            let placement = NotePlacement(
+                placed: body["placed"] as? [String] ?? [], missing: Set(body["missing"] as? [String] ?? []))
+            if model?.notePlacement != placement { model?.notePlacement = placement }
         default:
             break
         }
@@ -216,6 +268,7 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         model?.viewerOpen = false
+        model?.notePlacement = NotePlacement()
         load()
     }
 }
@@ -246,6 +299,8 @@ final class ReaderWebView: WKWebView {
 
     /// 触控板捏合交给 WebBridge，point 为视图内左上角起算的坐标
     var onMagnify: (@MainActor (NSEvent, CGPoint) -> Void)?
+    /// 右键菜单「添加备注…」
+    var onAddNote: (@MainActor () -> Void)?
 
     override func magnify(with event: NSEvent) {
         guard let onMagnify else { return super.magnify(with: event) }
@@ -262,7 +317,18 @@ final class ReaderWebView: WKWebView {
         }
         while menu.items.first?.isSeparatorItem == true { menu.removeItem(at: 0) }
         while menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
+        // 选中了文字（菜单里有「拷贝」）时在最上面加「添加备注…」
+        if onAddNote != nil, menu.items.contains(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierCopy" }) {
+            let item = NSMenuItem(title: "添加备注…", action: #selector(addNoteFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
         super.willOpenMenu(menu, with: event)
+    }
+
+    @objc private func addNoteFromMenu(_ sender: Any?) {
+        onAddNote?()
     }
 }
 

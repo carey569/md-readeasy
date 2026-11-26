@@ -34,6 +34,12 @@
 
   --viewer-bg: #f2f2f5;
   --viewer-bar: rgba(255, 255, 255, 0.82);
+
+  --note-bg: rgba(255, 196, 0, 0.16);
+  --note-bg-strong: rgba(255, 196, 0, 0.36);
+  --note-line: #f0b100;
+  --card-bg: #fbfbfc;
+  --input-bg: #fff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -67,6 +73,12 @@
 
     --viewer-bg: #18181a;
     --viewer-bar: rgba(58, 58, 60, 0.82);
+
+    --note-bg: rgba(255, 214, 10, 0.11);
+    --note-bg-strong: rgba(255, 214, 10, 0.27);
+    --note-line: #c9a400;
+    --card-bg: #2c2c2e;
+    --input-bg: #1f1f21;
   }
 }
 
@@ -415,6 +427,139 @@ details > summary { cursor: default; }
 }
 .viewer-bar .viewer-scale { width: 50px; font-variant-numeric: tabular-nums; }
 .viewer-sep { width: 1px; height: 16px; margin: 0 3px; background: var(--border); }
+
+/* —— 备注 —— */
+mark.note-mark {
+  color: inherit;
+  background: var(--note-bg);
+  border-radius: 0;
+  text-decoration-line: underline;
+  text-decoration-color: var(--note-line);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.2em;
+  text-decoration-skip-ink: none;
+}
+mark.note-mark.active { background: var(--note-bg-strong); }
+/* 新建时编辑框拿走了焦点，用和选区一样的颜色标出正在备注的文字 */
+mark.note-mark.pending {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  text-decoration-line: none;
+}
+mark.note-mark.flash { animation: note-flash 0.9s ease-out; }
+@keyframes note-flash {
+  0%, 60% { background: color-mix(in srgb, var(--note-line) 55%, transparent); }
+}
+
+.note-add, .note-card {
+  position: absolute;
+  display: none;
+  box-sizing: border-box;
+  background: var(--card-bg);
+  font: 13px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  color: var(--fg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.note-add {
+  z-index: 40;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px 0 9px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 0 0 0.5px var(--border), 0 4px 14px rgba(0, 0, 0, 0.14);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+}
+.note-add.visible { display: inline-flex; animation: note-pop 0.14s ease-out; }
+.note-add:hover { color: var(--accent); }
+.note-add svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@keyframes note-pop {
+  from { opacity: 0; transform: translateY(3px); }
+}
+
+.note-card {
+  z-index: 50;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 0.5px var(--border), 0 12px 36px rgba(0, 0, 0, 0.18);
+}
+.note-card.open { display: block; animation: note-pop 0.14s ease-out; }
+.note-quote {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-bottom: 9px;
+  padding-left: 9px;
+  border-left: 2.5px solid var(--note-line);
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.note-card textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 68px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  background: var(--input-bg);
+  font: inherit;
+  color: inherit;
+  resize: none;
+}
+.note-card textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.note-text {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.note-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.note-meta, .note-hint {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+.note-actions button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--inline-code-bg);
+  cursor: default;
+}
+.note-actions button:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.note-actions button.primary { color: #fff; background: var(--accent); }
+.note-actions button.primary:disabled { opacity: 0.4; }
+.note-actions button.confirm { color: #fff; background: var(--caution); }
 
 /* —— 查找高亮 —— */
 mark { background: var(--mark); color: inherit; border-radius: 2px; }

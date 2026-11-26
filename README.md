@@ -17,6 +17,7 @@
 | 字号与宽度 | 工具栏「大小」按钮、⌘+ / ⌘- 或触控板捏合调整字号；正文宽度可选标准（760px）、较宽（1040px）、全宽，大屏上不再两边留白；调整后停在原来读到的位置，所有窗口同步 |
 | 图片预览 | 点击图片或 Mermaid 图表放大查看：拖动或双指滑动平移，捏合、⌘ 滚轮或 ⌘+ / ⌘- 缩放，双击在适合窗口和放大之间切换；矢量图放大不糊；文件刷新时预览跟着更新 |
 | 大纲 | 右侧按标题生成目录，跟随阅读位置高亮，点击平滑跳转 |
+| 备注 | 选中文字后点浮出的「备注」按钮、右键「添加备注…」或按 ⌃⌘N 写备注；划过的文字带下划线，点击查看、编辑、删除。右侧边栏「备注」列出当前文档的全部备注，点击跳到原文。备注由应用保存，不改动 Markdown 文件；文件改动后自动重新定位，原文被删改时归到「原文已找不到」 |
 | 链接 | 点击 `other.md` 在当前标签页打开，⌘ 点击在新标签页打开；`#锚点` 页内跳转；网页链接用默认浏览器打开 |
 | 历史 | 后退 / 前进，并恢复到离开时的滚动位置 |
 | 查找 | 文内查找，显示「当前 / 总数」，文件刷新后保留高亮 |
@@ -34,14 +35,15 @@
 | 后退 / 前进 | ⌘[ / ⌘] |
 | 放大 / 缩小 / 实际大小 | ⌘+ / ⌘- / ⌘0，或触控板捏合 |
 | 正文宽度 | 「显示」菜单 →「正文宽度」 |
-| 显示或隐藏大纲 | ⌥⌘O |
+| 显示或隐藏大纲 / 备注 | ⌥⌘O / ⌥⌘N |
+| 给选中的文字添加备注 | ⌃⌘N |
 | 显示或隐藏边栏（文件夹模式） | ⌃⌘S |
 | 用外部编辑器打开 | ⌘E |
 | 在 Finder 中显示 / 拷贝文件路径 | ⇧⌘R / ⌥⌘C |
 | 新建标签页 / 新建窗口 | ⌘T / ⌘N |
 | 切换标签页 | ⌃⇥ / ⌃⇧⇥ |
 
-查找栏里按 ↩ 跳到下一个、⇧↩ 跳到上一个、esc 关闭；快速打开面板里用 ↑ ↓ 选择、↩ 打开、esc 关闭；图片预览里 ⌘+ / ⌘- 缩放、⌘0 在适合窗口和实际大小之间切换、方向键平移、esc 或点击空白处关闭。
+查找栏里按 ↩ 跳到下一个、⇧↩ 跳到上一个、esc 关闭；备注编辑框里 ⌘↩ 保存、esc 取消；快速打开面板里用 ↑ ↓ 选择、↩ 打开、esc 关闭；图片预览里 ⌘+ / ⌘- 缩放、⌘0 在适合窗口和实际大小之间切换、方向键平移、esc 或点击空白处关闭。
 
 ## 安装
 
@@ -65,6 +67,7 @@ osascript -e 'tell application id "io.github.ruichen31.ReadEasy" to quit'
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u /Applications/ReadEasy.app
 rm -rf /Applications/ReadEasy.app
 defaults delete io.github.ruichen31.ReadEasy
+rm -rf ~/Library/Application\ Support/ReadEasy   # 备注
 ```
 
 ## 开发
@@ -91,10 +94,11 @@ Sources/ReadEasy/
   MainMenu.swift              菜单栏与快捷键
   ReaderWindowController.swift  窗口：标题、代理图标、菜单动作
   ReaderModel.swift           单个窗口的状态：当前文档、文件夹、历史、查找、快速打开
-  ReaderView.swift            SwiftUI 界面：侧边栏、文档区、大纲、查找栏、快速打开、欢迎页
+  ReaderView.swift            SwiftUI 界面：侧边栏、文档区、大纲与备注列表、查找栏、快速打开、欢迎页
   WebBridge.swift             WKWebView 与渲染页之间的双向通信
   FileSystem.swift            文件树扫描、单文件监听、目录监听（FSEvents）
   QuickOpen.swift             快速打开的模糊匹配
+  Notes.swift                 备注的数据结构与存储
   Support.swift               偏好设置、文本编码、外部编辑器
   DebugHooks.swift            仅 Debug：自动化验证钩子
 Resources/
@@ -103,7 +107,7 @@ Resources/
   zh-Hans.lproj/              中文本地化，系统菜单项显示为中文
   web/index.html              渲染页
   web/reader.css              阅读样式
-  web/reader.js               Markdown 渲染、大纲、查找、链接处理
+  web/reader.js               Markdown 渲染、大纲、查找、链接处理、划词备注
   web/vendor/                 第三方渲染库
 scripts/
   build-app.sh                编译并组装 .app，--install 时安装并注册
@@ -120,6 +124,7 @@ scripts/
 - **安全**：页面设置了 CSP，Markdown 里内嵌的脚本和 `on*` 事件不会执行；指向可执行文件的本地链接只在 Finder 中显示，不直接运行。
 - **图片预览**：在页面内叠一层预览，Mermaid 图表复制一份 SVG 节点，图片用同一地址新建 `<img>`；缩放时直接改元素的宽高而不是 CSS `scale`，矢量图在任意倍率下都按实际尺寸重绘。预览打开时页面会告诉原生层，菜单里的缩放快捷键和 esc 就改为作用于预览。
 - **字号与宽度**：字号用 WKWebView 的 `pageZoom` 整页缩放，宽度是页面里的 CSS 变量。触控板捏合在原生层（`magnify(with:)`）处理，过程中只改当前窗口，松手后按 5% 取整保存并同步到所有窗口；预览打开时捏合转给预览。重新排版前后以视口顶部所在的段落为锚点，按它在段落里的相对位置恢复滚动，所以改字号、改宽度、调窗口大小都不会跳走。
+- **备注**：存在 `~/Library/Application Support/ReadEasy/notes.json`，按文件路径分组（Debug 构建用 `ReadEasy Debug` 目录，不碰正式数据）；文件移动或改名后原来的备注不会跟过去。每条备注记下选中的原文（空白合并为单个空格）、前后各 32 个字和在正文文字里的位置。每次渲染都在当前内容里重新查找原文，出现多处时取前后文最吻合、离原位置最近的一处，然后把覆盖到的文字节点切开包进 `<mark>`；块与块之间的换行不包，不影响表格和列表排版。查找时先拆掉备注标记再匹配，所以查找词可以跨过备注边界。同一文件在多个窗口打开时，改动通过通知同步。
 - **滚动位置**：页面在滚动停下后上报位置，原生层缓存，用于后退 / 前进恢复，以及网页进程意外退出后的重新渲染。
 
 ### 自动化验证
@@ -129,13 +134,15 @@ Debug 构建会监听分布式通知 `ReadEasy.debug`，`userInfo` 为 `action`�
 | action | 说明 |
 | --- | --- |
 | `open` / `navigate` | 打开路径 / 在当前窗口跳转到文件 |
-| `back` / `forward` / `outline` / `sidebar` / `quickOpen` / `zoomIn` / `newTab` | 对应菜单操作 |
+| `back` / `forward` / `outline` / `notesPanel` / `sidebar` / `quickOpen` / `zoomIn` / `newTab` | 对应菜单操作 |
+| `addNote` | 对页面当前选区执行「添加备注…」 |
+| `revealNote` | 在正文里打开备注列表中第 `arg` 条，`arg` 写成 `0,edit` 时直接进入编辑 |
 | `width` | 正文宽度：`standard` / `wide` / `full` |
 | `pinch` | 模拟一次捏合，`arg` 为每一步的放大量，逗号分隔（如 `0.1,0.1`） |
 | `layoutSettings` / `popoverShot` | 开关「字号与宽度」面板 / 把弹出面板截图到 `arg` |
 | `find` | 打开查找栏并搜索 `arg` |
 | `js` | 在页面中执行 `arg`，结果写入 `out` |
-| `state` | 把窗口状态（标题、当前文件、标题列表、查找结果、标签页等）以 JSON 写入 `out` |
+| `state` | 把窗口状态（标题、当前文件、标题列表、查找结果、标签页、备注等）以 JSON 写入 `out` |
 | `menus` | 把菜单结构写入 `out` |
 | `snapshot` | 截取当前窗口保存到 `arg`（PNG） |
 | `appearance` | `light` / `dark` / 其他值跟随系统 |

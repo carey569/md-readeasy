@@ -35,9 +35,18 @@ final class ReaderModel {
     private(set) var loadError: String?
     var headings: [Heading] = []
     var activeHeading: String?
-    var showOutline = Preferences.showOutline {
-        didSet { Preferences.showOutline = showOutline }
+
+    // 右侧边栏：大纲 / 备注
+    var showInspector = Preferences.showInspector {
+        didSet { Preferences.showInspector = showInspector }
     }
+    var inspectorTab = Preferences.inspectorTab {
+        didSet { Preferences.inspectorTab = inspectorTab }
+    }
+
+    // 备注
+    private(set) var notes: [Note] = []
+    var notePlacement = NotePlacement()
 
     // 查找
     var findVisible = false
@@ -71,17 +80,25 @@ final class ReaderModel {
     @ObservationIgnored private var folderMonitor: DirectoryMonitor?
     @ObservationIgnored private var renderedText: String?
     @ObservationIgnored private var reloadWork: DispatchWorkItem?
+    @ObservationIgnored private var notesObserver: NSObjectProtocol?
 
     var isEmpty: Bool { rootFolder == nil && currentFile == nil }
 
     init() {
         web.model = self
+        notesObserver = NotificationCenter.default.addObserver(
+            forName: .readerNotesDidChange, object: nil, queue: .main) { [weak self] note in
+            let path = note.userInfo?["path"] as? String
+            MainActor.assumeIsolated { self?.notesDidChange(path: path) }
+        }
     }
 
     func teardown() {
         fileWatcher = nil
         folderMonitor = nil
         reloadWork?.cancel()
+        notesObserver.map(NotificationCenter.default.removeObserver)
+        notesObserver = nil
     }
 
     // MARK: 打开
@@ -163,6 +180,8 @@ final class ReaderModel {
         headings = []
         activeHeading = nil
         renderedText = nil
+        notes = NoteStore.shared.notes(for: url)
+        notePlacement = NotePlacement()
         revealInSidebar(url)
         fileWatcher = FileWatcher(url: url) { [weak self] in self?.scheduleReload() }
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
@@ -179,7 +198,7 @@ final class ReaderModel {
         loadError = nil
         if keepScroll, text == renderedText { return }
         renderedText = text
-        web.render(markdown: text, fileURL: url, anchor: anchor, scrollY: scrollY, keepScroll: keepScroll)
+        web.render(markdown: text, fileURL: url, anchor: anchor, scrollY: scrollY, keepScroll: keepScroll, notes: notes)
     }
 
     /// 外部编辑器保存时可能连续触发多次事件，合并成一次刷新
@@ -210,6 +229,59 @@ final class ReaderModel {
     func toggleSidebar() {
         guard rootFolder != nil else { return }
         columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+    }
+
+    /// 菜单「显示大纲 / 显示备注」：已经显示着这一栏就收起，否则切过去
+    func toggleInspector(_ tab: InspectorTab) {
+        if showInspector, inspectorTab == tab {
+            showInspector = false
+        } else {
+            inspectorTab = tab
+            showInspector = true
+        }
+    }
+
+    // MARK: 备注
+
+    /// 列表顺序：能在文档里找到的按出现先后，找不到原文的单独放在后面
+    var sortedNotes: (placed: [Note], missing: [Note]) {
+        let order = Dictionary(notePlacement.placed.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        let placed = notes.filter { !notePlacement.missing.contains($0.id) }
+            .sorted { (order[$0.id] ?? .max, $0.start) < (order[$1.id] ?? .max, $1.start) }
+        return (placed, notes.filter { notePlacement.missing.contains($0.id) })
+    }
+
+    func addNote(quote: String, prefix: String, suffix: String, start: Int, text: String) {
+        guard let url = currentFile else { return }
+        NoteStore.shared.add(quote: quote, prefix: prefix, suffix: suffix, start: start, text: text, to: url)
+    }
+
+    func updateNote(_ id: String, text: String) {
+        guard let url = currentFile else { return }
+        NoteStore.shared.update(id, text: text, in: url)
+    }
+
+    func deleteNote(_ id: String) {
+        guard let url = currentFile else { return }
+        NoteStore.shared.delete(id, in: url)
+    }
+
+    /// 给页面里选中的文字添加备注；没有选中正文时提示音
+    func addNoteFromSelection() {
+        guard currentFile != nil else { return }
+        Task {
+            if await !web.addNoteFromSelection() { NSSound.beep() }
+        }
+    }
+
+    func revealNote(_ id: String, edit: Bool = false) {
+        web.revealNote(id, edit: edit)
+    }
+
+    private func notesDidChange(path: String?) {
+        guard let url = currentFile, url.path == path else { return }
+        notes = NoteStore.shared.notes(for: url)
+        web.setNotes(notes)
     }
 
     // MARK: 链接

@@ -81,7 +81,9 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func readerFindNext(_ sender: Any?) { model.findStep(backwards: false) }
     @objc func readerFindPrevious(_ sender: Any?) { model.findStep(backwards: true) }
     @objc func readerQuickOpen(_ sender: Any?) { model.toggleQuickOpen() }
-    @objc func readerToggleOutline(_ sender: Any?) { model.showOutline.toggle() }
+    @objc func readerToggleOutline(_ sender: Any?) { model.toggleInspector(.outline) }
+    @objc func readerToggleNotes(_ sender: Any?) { model.toggleInspector(.notes) }
+    @objc func readerAddNote(_ sender: Any?) { model.addNoteFromSelection() }
     @objc func readerToggleSidebar(_ sender: Any?) { model.toggleSidebar() }
 
     @objc func readerOpenInEditor(_ sender: Any?) {
@@ -117,7 +119,12 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(readerGoForward(_:)): return model.canGoForward
         case #selector(readerFind(_:)), #selector(readerFindNext(_:)), #selector(readerFindPrevious(_:)): return hasFile
         case #selector(readerToggleOutline(_:)):
-            item.title = model.showOutline ? "隐藏大纲" : "显示大纲"
+            item.title = model.showInspector && model.inspectorTab == .outline ? "隐藏大纲" : "显示大纲"
+            return hasFile
+        case #selector(readerToggleNotes(_:)):
+            item.title = model.showInspector && model.inspectorTab == .notes ? "隐藏备注" : "显示备注"
+            return hasFile
+        case #selector(readerAddNote(_:)):
             return hasFile
         case #selector(readerToggleSidebar(_:)):
             item.title = model.columnVisibility == .detailOnly ? "显示边栏" : "隐藏边栏"

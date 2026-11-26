@@ -87,6 +87,8 @@ enum MainMenu {
         menu.addItem(item("查找…", #selector(ReaderWindowController.readerFind(_:)), "f"))
         menu.addItem(item("查找下一个", #selector(ReaderWindowController.readerFindNext(_:)), "g"))
         menu.addItem(item("查找上一个", #selector(ReaderWindowController.readerFindPrevious(_:)), "g", [.command, .shift]))
+        menu.addItem(.separator())
+        menu.addItem(item("添加备注…", #selector(ReaderWindowController.readerAddNote(_:)), "n", [.command, .control]))
         return menu
     }
 
@@ -94,6 +96,7 @@ enum MainMenu {
         let menu = NSMenu(title: "显示")
         menu.addItem(item("隐藏边栏", #selector(ReaderWindowController.readerToggleSidebar(_:)), "s", [.command, .control]))
         menu.addItem(item("显示大纲", #selector(ReaderWindowController.readerToggleOutline(_:)), "o", [.command, .option]))
+        menu.addItem(item("显示备注", #selector(ReaderWindowController.readerToggleNotes(_:)), "n", [.command, .option]))
         menu.addItem(.separator())
         menu.addItem(item("实际大小", #selector(AppDelegate.zoomResetAction(_:)), "0"))
         menu.addItem(item("放大", #selector(AppDelegate.zoomInAction(_:)), "+"))

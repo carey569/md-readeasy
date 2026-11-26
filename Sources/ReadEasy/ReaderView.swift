@@ -78,9 +78,9 @@ struct DocumentPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .inspector(isPresented: outlinePresented) {
-            OutlineView(model: model)
-                .inspectorColumnWidth(min: 180, ideal: 230, max: 360)
+        .inspector(isPresented: inspectorPresented) {
+            InspectorView(model: model)
+                .inspectorColumnWidth(min: 200, ideal: 250, max: 380)
         }
         .toolbar {
             if model.currentFile != nil {
@@ -107,20 +107,20 @@ struct DocumentPane: View {
                         LayoutSettingsView()
                     }
                     Button {
-                        model.showOutline.toggle()
+                        model.showInspector.toggle()
                     } label: {
-                        Label("大纲", systemImage: "list.bullet.indent")
+                        Label("大纲与备注", systemImage: "list.bullet.indent")
                     }
-                    .help("显示或隐藏大纲 ⌥⌘O")
+                    .help("显示或隐藏大纲与备注")
                 }
             }
         }
     }
 
-    private var outlinePresented: Binding<Bool> {
+    private var inspectorPresented: Binding<Bool> {
         Binding(
-            get: { model.showOutline && model.currentFile != nil },
-            set: { if model.currentFile != nil { model.showOutline = $0 } })
+            get: { model.showInspector && model.currentFile != nil },
+            set: { if model.currentFile != nil { model.showInspector = $0 } })
     }
 }
 
@@ -321,6 +321,31 @@ private struct FileTreeRow: View {
     }
 }
 
+// MARK: - 右侧边栏
+
+struct InspectorView: View {
+    @Bindable var model: ReaderModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("边栏内容", selection: $model.inspectorTab) {
+                Text("大纲").tag(InspectorTab.outline)
+                Text(model.notes.isEmpty ? "备注" : "备注 \(model.notes.count)").tag(InspectorTab.notes)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+
+            switch model.inspectorTab {
+            case .outline: OutlineView(model: model)
+            case .notes: NotesListView(model: model)
+            }
+        }
+    }
+}
+
 // MARK: - 大纲
 
 struct OutlineView: View {
@@ -384,6 +409,99 @@ private struct OutlineRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - 备注列表
+
+struct NotesListView: View {
+    let model: ReaderModel
+
+    var body: some View {
+        let (placed, missing) = model.sortedNotes
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(placed) { NoteRow(note: $0, missing: false, model: model) }
+                if !missing.isEmpty {
+                    Text("原文已找不到")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.top, placed.isEmpty ? 0 : 14)
+                        .padding(.bottom, 2)
+                        .help("文件改动后，这些备注划过的文字在文档里找不到了")
+                    ForEach(missing) { NoteRow(note: $0, missing: true, model: model) }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
+        }
+        .overlay {
+            if model.notes.isEmpty {
+                VStack(spacing: 6) {
+                    Text("没有备注")
+                        .foregroundStyle(.tertiary)
+                    Text("选中文字后点「备注」，或按 ⌃⌘N")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+private struct NoteRow: View {
+    let note: Note
+    let missing: Bool
+    let model: ReaderModel
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            if !missing { model.revealNote(note.id) }
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(note.quote)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(missing ? AnyShapeStyle(.quaternary) : AnyShapeStyle(Color.yellow))
+                            .frame(width: 2.5)
+                    }
+                Text(note.text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(missing ? .secondary : .primary)
+                    .lineLimit(4)
+                Text(note.modified, format: .dateTime.month().day().hour().minute())
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(hovering && !missing ? Color.primary.opacity(0.05) : .clear))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .contextMenu {
+            if !missing {
+                Button("编辑备注") { model.revealNote(note.id, edit: true) }
+            }
+            Button("拷贝备注") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("> \(note.quote)\n\n\(note.text)", forType: .string)
+            }
+            Divider()
+            Button("删除备注", role: .destructive) { model.deleteNote(note.id) }
+        }
     }
 }
 

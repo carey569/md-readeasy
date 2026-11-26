@@ -29,6 +29,13 @@ extension URL {
 extension Notification.Name {
     /// 正文字号或宽度变了，所有窗口跟着更新
     static let readerLayoutDidChange = Notification.Name("ReadEasy.layoutDidChange")
+    /// 某个文件的备注变了，userInfo["path"] 为文件路径，打开着这个文件的窗口跟着更新
+    static let readerNotesDidChange = Notification.Name("ReadEasy.notesDidChange")
+}
+
+/// 右侧边栏显示的内容
+enum InspectorTab: String {
+    case outline, notes
 }
 
 /// 正文栏的最大宽度
@@ -89,9 +96,15 @@ enum Preferences {
         }
     }
 
-    static var showOutline: Bool {
+    /// 右侧边栏（大纲 / 备注）是否显示；沿用早期只有大纲时的键名
+    static var showInspector: Bool {
         get { defaults.object(forKey: "showOutline") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "showOutline") }
+    }
+
+    static var inspectorTab: InspectorTab {
+        get { defaults.string(forKey: "inspectorTab").flatMap(InspectorTab.init) ?? .outline }
+        set { defaults.set(newValue.rawValue, forKey: "inspectorTab") }
     }
 
     static var editorPath: String? {

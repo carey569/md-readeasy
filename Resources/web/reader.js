@@ -210,6 +210,14 @@
   async function render(p) {
     const seq = ++renderSeq;
     if (p.base) baseEl.href = p.base;
+    if (Array.isArray(p.notes)) notes = p.notes;
+    // 切换文件时关掉备注卡片；自动刷新时保留，写了一半的备注不会丢
+    if (!p.keepScroll) {
+      pendingNote = null;
+      closeCard();
+      lastPlacement = '';
+    }
+    hideNoteButton();
     const [frontMatter, body] = splitFrontMatter(p.markdown || '');
     const env = {};
     let html = md.render(body, env);
@@ -224,6 +232,7 @@
     const viewing = p.keepScroll ? viewerIndex() : -1;
     content.replaceChildren(...staging.childNodes);
     headingEls = [...content.querySelectorAll('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')];
+    markNotes();
     // 自动刷新时预览跟着更新；切换文件则关闭预览
     if (viewing >= 0) syncViewer(viewing);
     else closeViewer(false);
@@ -232,6 +241,7 @@
     else if (p.keepScroll) settleScroll(() => window.scrollTo(0, prevY));
     else settleScroll(() => window.scrollTo(0, p.scrollY || 0));
 
+    positionCard();
     captureAnchor();
     post('headings', { headings: env.headings || [] });
     lastActive = undefined;
@@ -331,12 +341,15 @@
     if (getComputedStyle(content).getPropertyValue('--content-width').trim() === width) return;
     document.documentElement.style.setProperty('--content-width', width);
     restoreAnchor();
+    positionCard();
     requestAnimationFrame(updateActive);
   }
 
   // 窗口尺寸变化（包括原生层调整字号、开关侧边栏和大纲）会改变排版和标题位置
   window.addEventListener('resize', () => {
     restoreAnchor();
+    hideNoteButton();
+    positionCard();
     requestAnimationFrame(updateActive);
   });
 
@@ -438,6 +451,7 @@
     // 矢量图放大不会糊，适合窗口时最多放大到 2 倍；位图最多显示到原始大小
     const maxFit = inline || /\.svg(?:[?#]|$)/i.test(source.src) ? 2 : 1;
     view = { source, item, w, h, inline, maxFit, src: inline ? '' : source.src, scale: 1, x: 0, y: 0, fitted: true };
+    hideNoteButton();
     viewerEl.prepend(item);
     viewerEl.classList.add('visible');
     // 先放在原图的位置，再过渡到适合窗口的大小
@@ -605,10 +619,505 @@
     layoutViewer();
   });
 
-  // —— 点击：链接、复制代码、图片预览 ——
+
+  // —— 备注 ——
+  // 备注由原生层保存（不写回 Markdown 文件），页面负责划词、在正文里标出来、查看和编辑。
+  // 定位靠「原文 + 前后文 + 位置」：每次渲染都在当前内容里重新查找原文，前后文最吻合、离原位置最近的一处胜出；
+  // 文件改动后找不到原文的备注报告给原生层，在边栏里单独列出。
+
+  const NOTE_CONTEXT = 32;
+  const SPACE = /\s/;
+  let notes = [];
+  let pendingNote = null; // 正在新建的备注：{ quote, prefix, suffix, start, saving }
+  let card = null; // 打开着的备注卡片：{ id, editing, initial, side, top, left }，id 为空表示新建
+  let lastPlacement = '';
+
+  // 正文的纯文字，跳过 Mermaid 图、公式的 MathML 副本和代码块工具条，空白合并成一个空格。
+  // toNorm：原始位置 → 合并空白后的位置；toRaw 反过来
+  function textModel() {
+    const nodes = [];
+    const starts = [];
+    const index = new Map();
+    let raw = '';
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const p = node.parentElement;
+        return !p || p.closest('svg, .katex-mathml, .code-tools, style, script, textarea')
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      index.set(node, nodes.length);
+      nodes.push(node);
+      starts.push(raw.length);
+      raw += node.nodeValue;
+    }
+    const chars = [];
+    const toRaw = [];
+    const toNorm = new Int32Array(raw.length + 1);
+    let space = true;
+    for (let i = 0; i < raw.length; i++) {
+      toNorm[i] = chars.length;
+      const c = raw[i];
+      if (SPACE.test(c)) {
+        if (space) continue;
+        space = true;
+        chars.push(' ');
+      } else {
+        space = false;
+        chars.push(c);
+      }
+      toRaw.push(i);
+    }
+    toNorm[raw.length] = chars.length;
+    toRaw.push(raw.length);
+    return { nodes, starts, index, length: raw.length, norm: chars.join(''), toRaw, toNorm };
+  }
+
+  // 选区边界 → 原始文字里的位置。边界落在元素上时取它后面第一个文字节点的开头
+  function rawOffset(m, container, offset) {
+    const i = container.nodeType === Node.TEXT_NODE ? m.index.get(container) : undefined;
+    if (i !== undefined) return m.starts[i] + Math.min(offset, container.length);
+    const probe = document.createRange();
+    probe.setStart(container, offset);
+    let lo = 0;
+    let hi = m.nodes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (probe.comparePoint(m.nodes[mid], 0) < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < m.nodes.length ? m.starts[lo] : m.length;
+  }
+
+  function contentSelection() {
+    const sel = getSelection();
+    if (!sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    if (!range.intersectsNode(content) || cardEl.contains(range.commonAncestorContainer)) return null;
+    return range;
+  }
+
+  function anchorFor(range) {
+    const m = textModel();
+    let s = m.toNorm[rawOffset(m, range.startContainer, range.startOffset)];
+    let e = m.toNorm[rawOffset(m, range.endContainer, range.endOffset)];
+    while (s < e && m.norm[s] === ' ') s++;
+    while (e > s && m.norm[e - 1] === ' ') e--;
+    if (e <= s) return null;
+    return {
+      quote: m.norm.slice(s, e),
+      prefix: m.norm.slice(Math.max(0, s - NOTE_CONTEXT), s),
+      suffix: m.norm.slice(e, e + NOTE_CONTEXT),
+      start: s,
+    };
+  }
+
+  const sharedTail = (a, b) => {
+    let n = 0;
+    while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+    return n;
+  };
+  const sharedHead = (a, b) => {
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n++;
+    return n;
+  };
+
+  // 原文出现多处时，前后文吻合的字数多者胜，一样多取离原位置近的；找不到返回 -1
+  function locate(m, note) {
+    const q = note.quote;
+    if (!q) return -1;
+    let best = -1;
+    let bestScore = -1;
+    let bestDist = Infinity;
+    for (let at = m.norm.indexOf(q); at !== -1; at = m.norm.indexOf(q, at + 1)) {
+      const end = at + q.length;
+      const score = sharedTail(m.norm.slice(Math.max(0, at - note.prefix.length), at), note.prefix)
+        + sharedHead(m.norm.slice(end, end + note.suffix.length), note.suffix);
+      const dist = Math.abs(at - note.start);
+      if (score > bestScore || (score === bestScore && dist < bestDist)) {
+        best = at;
+        bestScore = score;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  function noteMark(note, child) {
+    const mark = document.createElement('mark');
+    mark.className = 'note-mark';
+    if (note.id) {
+      mark.dataset.note = note.id;
+      if (card && card.id === note.id) mark.classList.add('active');
+    } else {
+      mark.classList.add('pending');
+    }
+    mark.append(child);
+    return mark;
+  }
+
+  const isInline = (n) => !!n && (n.nodeType === Node.TEXT_NODE
+    || (n.nodeType === Node.ELEMENT_NODE && getComputedStyle(n).display.startsWith('inline')));
+
+  // 把一个文字节点按备注边界切开，被备注覆盖的片段包进 <mark>；几条备注重叠时嵌套
+  function wrapText(node, segs) {
+    const text = node.nodeValue;
+    // 只有空白的节点夹在行内内容之间才包（下划线不断开）；块与块之间的换行不包，免得影响表格、列表排版
+    if (!text.trim() && !(isInline(node.previousSibling) && isInline(node.nextSibling))) return;
+    const cuts = [...new Set([0, text.length, ...segs.flatMap((g) => [g.s, g.e])])].sort((a, b) => a - b);
+    const frag = document.createDocumentFragment();
+    for (let k = 1; k < cuts.length; k++) {
+      const a = cuts[k - 1];
+      const b = cuts[k];
+      let piece = document.createTextNode(text.slice(a, b));
+      for (let j = segs.length - 1; j >= 0; j--) {
+        if (segs[j].s <= a && segs[j].e >= b) piece = noteMark(segs[j].note, piece);
+      }
+      frag.append(piece);
+    }
+    node.replaceWith(frag);
+  }
+
+  function markNotes() {
+    const list = pendingNote ? [...notes, pendingNote] : notes;
+    const placed = [];
+    const missing = [];
+    if (list.length) {
+      const m = textModel();
+      const segments = new Map();
+      for (const note of list) {
+        const at = locate(m, note);
+        if (at < 0) {
+          if (note.id) missing.push(note.id);
+          continue;
+        }
+        if (note.id) placed.push([note.id, at]);
+        const rs = m.toRaw[at];
+        const re = m.toRaw[at + note.quote.length - 1] + 1;
+        // 从包含起点的文字节点开始
+        let lo = 0;
+        let hi = m.starts.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (m.starts[mid] <= rs) lo = mid + 1;
+          else hi = mid;
+        }
+        for (let i = Math.max(lo - 1, 0); i < m.nodes.length && m.starts[i] < re; i++) {
+          const s = Math.max(rs - m.starts[i], 0);
+          const e = Math.min(re - m.starts[i], m.nodes[i].length);
+          if (e <= s) continue;
+          if (!segments.has(i)) segments.set(i, []);
+          segments.get(i).push({ s, e, note });
+        }
+      }
+      segments.forEach((segs, i) => wrapText(m.nodes[i], segs));
+    }
+    placed.sort((a, b) => a[1] - b[1]);
+    const ids = placed.map((p) => p[0]);
+    const key = JSON.stringify([ids, missing]);
+    if (key !== lastPlacement) {
+      lastPlacement = key;
+      post('notes', { placed: ids, missing });
+    }
+  }
+
+  function unwrapNotes() {
+    const marks = content.querySelectorAll('mark.note-mark');
+    if (!marks.length) return;
+    const parents = new Set();
+    for (const mark of marks) {
+      parents.add(mark.parentNode);
+      mark.replaceWith(...mark.childNodes);
+    }
+    parents.forEach((p) => p.normalize());
+  }
+
+  function applyNotes() {
+    unwrapNotes();
+    markNotes();
+    positionCard();
+  }
+
+  function setNotes(list) {
+    notes = Array.isArray(list) ? list : [];
+    if (pendingNote && pendingNote.saving) pendingNote = null;
+    if (card && card.id) {
+      const note = notes.find((n) => n.id === card.id);
+      if (!note) closeCard();
+      else if (!card.editing) fillCard(note); // 其他窗口改了这条备注
+    }
+    applyNotes();
+  }
+
+  // —— 备注卡片：查看 / 编辑 ——
+
+  const cardEl = document.createElement('div');
+  cardEl.className = 'note-card';
+  document.body.appendChild(cardEl);
+
+  const noteFor = (id) => (id ? notes.find((n) => n.id === id) : pendingNote);
+  const marksOf = (id) => [...content.querySelectorAll(
+    id ? `mark.note-mark[data-note="${CSS.escape(id)}"]` : 'mark.note-mark.pending')];
+  const cardInput = () => (card && card.editing ? cardEl.querySelector('textarea') : null);
+  const cardDirty = () => {
+    const input = cardInput();
+    return !!input && input.value.trim() !== card.initial.trim();
+  };
+
+  function formatTime(ms) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}年`;
+    return `${year}${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function fitInput(input) {
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight + 2, 240)}px`;
+  }
+
+  function syncSave() {
+    const input = cardInput();
+    const save = cardEl.querySelector('[data-act="save"]');
+    if (input && save) save.disabled = !input.value.trim();
+  }
+
+  function fillCard(note) {
+    if (card.editing) {
+      cardEl.innerHTML = '<div class="note-quote"></div>'
+        + '<textarea rows="3" placeholder="写下备注…"></textarea>'
+        + '<div class="note-actions"><span class="note-hint">⌘↩ 保存</span>'
+        + '<button type="button" data-act="cancel">取消</button>'
+        + '<button type="button" data-act="save" class="primary">保存</button></div>';
+      cardEl.querySelector('.note-quote').textContent = note.quote;
+      const input = cardEl.querySelector('textarea');
+      input.value = note.text || '';
+      fitInput(input);
+      syncSave();
+    } else {
+      cardEl.innerHTML = '<div class="note-text"></div>'
+        + '<div class="note-actions"><span class="note-meta"></span>'
+        + '<button type="button" data-act="edit">编辑</button>'
+        + '<button type="button" data-act="delete">删除</button></div>';
+      cardEl.querySelector('.note-text').textContent = note.text;
+      cardEl.querySelector('.note-meta').textContent = formatTime(note.modified);
+    }
+  }
+
+  function openCard(id, editing) {
+    const input = cardInput();
+    if (input && card.id === id && editing) {
+      input.focus();
+      return true;
+    }
+    if (card && card.id !== id) closeCard();
+    const note = noteFor(id);
+    if (!note) return false;
+    hideNoteButton();
+    card = { id, editing, initial: editing ? note.text || '' : '' };
+    content.querySelectorAll('mark.note-mark.active').forEach((m) => m.classList.remove('active'));
+    if (id) marksOf(id).forEach((m) => m.classList.add('active'));
+    cardEl.classList.add('open');
+    fillCard(note);
+    positionCard(true);
+    const field = cardInput();
+    if (field) {
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
+    return true;
+  }
+
+  function closeCard() {
+    if (!card) return;
+    const wasNew = !card.id;
+    card = null;
+    cardEl.classList.remove('open');
+    cardEl.replaceChildren();
+    content.querySelectorAll('mark.note-mark.active').forEach((m) => m.classList.remove('active'));
+    if (wasNew && pendingNote && !pendingNote.saving) {
+      pendingNote = null;
+      applyNotes();
+    }
+  }
+
+  // 卡片放在备注文字下方，下方放不下且上方更宽裕时放上方；choose 为 false 时沿用上次的方向，打字时不来回跳
+  function positionCard(choose) {
+    if (!card) return;
+    const w = cardEl.offsetWidth;
+    const h = cardEl.offsetHeight;
+    const rects = marksOf(card.id).flatMap((m) => [...m.getClientRects()]).filter((r) => r.width || r.height);
+    if (rects.length) {
+      const top = rects.reduce((v, r) => Math.min(v, r.top), Infinity);
+      const bottom = rects.reduce((v, r) => Math.max(v, r.bottom), -Infinity);
+      if (choose || !card.side) {
+        const below = innerHeight - bottom - 12;
+        card.side = h + 8 <= below || below >= top - 12 ? 'below' : 'above';
+      }
+      const y = card.side === 'below' ? bottom + 8 : top - 8 - h;
+      card.top = Math.max(8, y + scrollY);
+      card.left = clamp(rects[0].left - 12, 16, Math.max(16, innerWidth - w - 16)) + scrollX;
+    } else if (card.top == null) {
+      // 找不到对应的文字（原文已经不在了）时放在视口里
+      card.top = scrollY + Math.max(16, (innerHeight - h) / 3);
+      card.left = scrollX + Math.max(16, (innerWidth - w) / 2);
+    }
+    cardEl.style.top = `${card.top}px`;
+    cardEl.style.left = `${card.left}px`;
+  }
+
+  function saveCard() {
+    const input = cardInput();
+    const text = input ? input.value.trim() : '';
+    if (!text) return;
+    if (card.id) {
+      if (text !== card.initial.trim()) post('noteUpdate', { id: card.id, text });
+    } else if (pendingNote) {
+      // 原生层保存后会下发新的备注列表，到时再去掉临时高亮，中间不闪
+      const { quote, prefix, suffix, start } = pendingNote;
+      pendingNote.saving = true;
+      post('noteAdd', { quote, prefix, suffix, start, text });
+    }
+    closeCard();
+  }
+
+  cardEl.addEventListener('click', (e) => {
+    const button = e.target.closest('button');
+    if (!button || !card) return;
+    const act = button.dataset.act;
+    if (act === 'save') saveCard();
+    else if (act === 'cancel') closeCard();
+    else if (act === 'edit') openCard(card.id, true);
+    else if (act === 'delete') {
+      // 点两次才删，免得误触
+      if (!button.classList.contains('confirm')) {
+        button.classList.add('confirm');
+        button.textContent = '确认删除';
+        return;
+      }
+      post('noteDelete', { id: card.id });
+      closeCard();
+    }
+  });
+
+  cardEl.addEventListener('input', (e) => {
+    if (e.target.tagName !== 'TEXTAREA') return;
+    fitInput(e.target);
+    syncSave();
+    positionCard();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (!card || view || e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') closeCard();
+    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && card.editing) saveCard();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  // 点到卡片外面关闭卡片；写了一半的备注要点「取消」或按 esc 才关
+  document.addEventListener('mousedown', (e) => {
+    if (!card || cardEl.contains(e.target) || viewerEl.contains(e.target) || cardDirty()) return;
+    if (e.target.closest('mark.note-mark[data-note]')) return; // 交给 click 切换到那条备注
+    closeCard();
+  });
+
+  // —— 划词：选中正文后在选区上方显示「备注」按钮 ——
+
+  const noteBtn = document.createElement('button');
+  noteBtn.type = 'button';
+  noteBtn.className = 'note-add';
+  noteBtn.innerHTML = `${icon('M10.6 2.9l2.5 2.5-7.4 7.4-3.2.7.7-3.2zM9.2 4.3l2.5 2.5')}<span>备注</span>`;
+  document.body.appendChild(noteBtn);
+
+  let pressing = false;
+  let selectionTimer = null;
+
+  function hideNoteButton() {
+    clearTimeout(selectionTimer);
+    noteBtn.classList.remove('visible');
+  }
+
+  function updateNoteButton() {
+    const range = card || view ? null : contentSelection();
+    const rects = range && range.toString().trim()
+      ? [...range.getClientRects()].filter((r) => r.width && r.height) : [];
+    if (!rects.length) return hideNoteButton();
+    noteBtn.classList.add('visible');
+    const w = noteBtn.offsetWidth;
+    const h = noteBtn.offsetHeight;
+    const first = rects[0];
+    let y = first.top - h - 8;
+    if (y < 8) y = rects[rects.length - 1].bottom + 8;
+    const x = clamp(first.left + first.width / 2 - w / 2, 8, Math.max(8, innerWidth - w - 8));
+    noteBtn.style.left = `${x + scrollX}px`;
+    noteBtn.style.top = `${y + scrollY}px`;
+  }
+
+  // 拖选过程中不显示，松开鼠标后再出现；键盘调整选区时稍等一下再显示
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || noteBtn.contains(e.target)) return;
+    pressing = true;
+    hideNoteButton();
+  }, true);
+  document.addEventListener('mouseup', () => {
+    if (!pressing) return;
+    pressing = false;
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(updateNoteButton, 10);
+  }, true);
+  document.addEventListener('selectionchange', () => {
+    if (pressing) return;
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(updateNoteButton, 150);
+  });
+
+  // 按下按钮时不让选区消失
+  noteBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  noteBtn.addEventListener('click', () => {
+    if (!noteFromSelection()) hideNoteButton();
+  });
+
+  function noteFromSelection() {
+    if (view) return false;
+    const range = contentSelection();
+    const anchor = range && anchorFor(range);
+    if (!anchor) return false;
+    if (card) closeCard();
+    pendingNote = anchor;
+    // 编辑框拿到焦点后选区会消失，用临时高亮标出正在备注的文字
+    getSelection().removeAllRanges();
+    applyNotes();
+    return openCard('', true);
+  }
+
+  // 从边栏跳到某条备注：滚到文字所在位置，闪一下，打开卡片
+  function noteReveal(id, edit) {
+    if (!marksOf(id).length) return false;
+    closeViewer(false);
+    const first = marksOf(id)[0];
+    const r = first.getBoundingClientRect();
+    if (r.top < 60 || r.bottom > innerHeight - 60) first.scrollIntoView({ block: 'center' });
+    // 正在写另一条备注时不切走，只标出位置
+    if (!(card && card.id !== id && cardDirty())) openCard(id, !!edit);
+    const marks = marksOf(id);
+    marks.forEach((m) => {
+      m.classList.remove('flash');
+      void m.offsetWidth;
+      m.classList.add('flash');
+    });
+    setTimeout(() => marks.forEach((m) => m.classList.remove('flash')), 1000);
+    return true;
+  }
+
+  // —— 点击：链接、复制代码、图片预览、备注 ——
 
   document.addEventListener('click', (e) => {
-    if (viewerEl.contains(e.target)) return;
+    if (viewerEl.contains(e.target) || cardEl.contains(e.target) || noteBtn.contains(e.target)) return;
     const zoomable = zoomableAt(e.target);
     if (zoomable) {
       openViewer(zoomable);
@@ -621,6 +1130,13 @@
       copy.textContent = '已复制';
       copy.classList.add('done');
       setTimeout(() => { copy.textContent = '复制'; copy.classList.remove('done'); }, 1400);
+      return;
+    }
+    // 点击划过备注的文字查看备注（拖选文字、点在链接上时不算）
+    const mark = e.target.closest('mark.note-mark[data-note]');
+    if (mark && !e.target.closest('a[href]') && getSelection().isCollapsed) {
+      if (card && card.id === mark.dataset.note && !card.editing) closeCard();
+      else if (!cardDirty()) openCard(mark.dataset.note, false);
       return;
     }
     const a = e.target.closest('a[href]');
@@ -645,7 +1161,8 @@
     for (const m of hits) {
       const parent = m.parentNode;
       if (!parent) continue;
-      parent.replaceChild(document.createTextNode(m.textContent), m);
+      // 保留里面嵌套的备注标记
+      m.replaceWith(...m.childNodes);
       parents.add(parent);
     }
     parents.forEach((p) => p.normalize());
@@ -654,6 +1171,8 @@
   }
 
   function collectHits(query) {
+    // 备注标记会把文字切成好几段，先拆掉，查找时才能跨过标记边界匹配；查完重新标上
+    unwrapNotes();
     const q = query.toLowerCase();
     const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
@@ -682,6 +1201,7 @@
       if (start < text.length) frag.append(text.slice(start));
       node.parentNode.replaceChild(frag, node);
     }
+    markNotes();
   }
 
   function markCurrent(scroll) {
@@ -741,6 +1261,9 @@
     viewerClose: () => closeViewer(true),
     setWidth,
     setAccent: (color) => document.documentElement.style.setProperty('--accent', color),
+    setNotes,
+    noteFromSelection,
+    noteReveal,
   };
 
   post('ready');
